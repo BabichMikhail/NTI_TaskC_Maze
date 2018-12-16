@@ -1,94 +1,124 @@
-﻿using UnityEngine;
-using System.Collections;
+﻿using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using UnityEngine;
 
-//<summary>
-//Game object, that creates maze and instantiates it in scene
-//</summary>
-public class MazeSpawner : MonoBehaviour {
-	public enum MazeGenerationAlgorithm{
-		PureRecursive,
-		RecursiveTree,
-		RandomTree,
-		OldestTree,
-		RecursiveDivision,
-	}
+public class MazeSpawner : MonoBehaviour
+{
+    public GameObject Floor;
+    public GameObject Wall;
+    public GameObject Pillar;
+    public GameObject GoalPrefab;
 
-	public MazeGenerationAlgorithm Algorithm = MazeGenerationAlgorithm.PureRecursive;
-	public bool FullRandom = false;
-	public int RandomSeed = 12345;
-	public GameObject Floor = null;
-	public GameObject Wall = null;
-	public GameObject Pillar = null;
-	public int Rows = 5;
-	public int Columns = 5;
-	public float CellWidth = 5;
-	public float CellHeight = 5;
-	public bool AddGaps = true;
-	public GameObject GoalPrefab = null;
+    public bool ReadMazeDataFromFile;
 
-	private BasicMazeGenerator mMazeGenerator = null;
+    public int SeedValue;
+    public int Rows;
+    public int Cols;
+    public int Coins;
+    public int BallEnergy;
 
-	void Start () {
-		if (!FullRandom) {
-			Random.seed = RandomSeed;
-		}
-		switch (Algorithm) {
-		case MazeGenerationAlgorithm.PureRecursive:
-			mMazeGenerator = new RecursiveMazeGenerator (Rows, Columns);
-			break;
-		case MazeGenerationAlgorithm.RecursiveTree:
-			mMazeGenerator = new RecursiveTreeMazeGenerator (Rows, Columns);
-			break;
-		case MazeGenerationAlgorithm.RandomTree:
-			mMazeGenerator = new RandomTreeMazeGenerator (Rows, Columns);
-			break;
-		case MazeGenerationAlgorithm.OldestTree:
-			mMazeGenerator = new OldestTreeMazeGenerator (Rows, Columns);
-			break;
-		case MazeGenerationAlgorithm.RecursiveDivision:
-			mMazeGenerator = new DivisionMazeGenerator (Rows, Columns);
-			break;
-		}
-		mMazeGenerator.GenerateMaze ();
-		for (int row = 0; row < Rows; row++) {
-			for(int column = 0; column < Columns; column++){
-				float x = column*(CellWidth+(AddGaps?.2f:0));
-				float z = row*(CellHeight+(AddGaps?.2f:0));
-				MazeCell cell = mMazeGenerator.GetMazeCell(row,column);
-				GameObject tmp;
-				tmp = Instantiate(Floor,new Vector3(x,0,z), Quaternion.Euler(0,0,0)) as GameObject;
-				tmp.transform.parent = transform;
-				if(cell.WallRight){
-					tmp = Instantiate(Wall,new Vector3(x+CellWidth/2,0,z)+Wall.transform.position,Quaternion.Euler(0,90,0)) as GameObject;// right
-					tmp.transform.parent = transform;
-				}
-				if(cell.WallFront){
-					tmp = Instantiate(Wall,new Vector3(x,0,z+CellHeight/2)+Wall.transform.position,Quaternion.Euler(0,0,0)) as GameObject;// front
-					tmp.transform.parent = transform;
-				}
-				if(cell.WallLeft){
-					tmp = Instantiate(Wall,new Vector3(x-CellWidth/2,0,z)+Wall.transform.position,Quaternion.Euler(0,270,0)) as GameObject;// left
-					tmp.transform.parent = transform;
-				}
-				if(cell.WallBack){
-					tmp = Instantiate(Wall,new Vector3(x,0,z-CellHeight/2)+Wall.transform.position,Quaternion.Euler(0,180,0)) as GameObject;// back
-					tmp.transform.parent = transform;
-				}
-				if(cell.IsGoal && GoalPrefab != null){
-					tmp = Instantiate(GoalPrefab,new Vector3(x,1,z), Quaternion.Euler(0,0,0)) as GameObject;
-					tmp.transform.parent = transform;
-				}
-			}
-		}
-		if(Pillar != null){
-			for (int row = 0; row < Rows+1; row++) {
-				for (int column = 0; column < Columns+1; column++) {
-					float x = column*(CellWidth+(AddGaps?.2f:0));
-					float z = row*(CellHeight+(AddGaps?.2f:0));
-					GameObject tmp = Instantiate(Pillar,new Vector3(x-CellWidth/2,0,z-CellHeight/2),Quaternion.identity) as GameObject;
-					tmp.transform.parent = transform;
-				}
-			}
-		}
-	}
+    private void ReadInputFile()
+    {
+        if (ReadMazeDataFromFile) {
+            var args = File.ReadAllText("input.txt").Split(' ');
+            MazeDescription.SeedValue = int.Parse(args[0]);
+            MazeDescription.Rows = int.Parse(args[1]);
+            MazeDescription.Cols = int.Parse(args[2]);
+            MazeDescription.Coins = int.Parse(args[3]);
+            MazeDescription.BallEnergy = int.Parse(args[4]);
+        }
+        else {
+            MazeDescription.SeedValue = SeedValue;
+            MazeDescription.Rows = Rows;
+            MazeDescription.Cols = Cols;
+            MazeDescription.Coins = Coins;
+            MazeDescription.BallEnergy = BallEnergy;
+        }
+    }
+
+    private void Awake()
+    {
+        ReadInputFile();
+        MazeDescription.PillarPrefab = Pillar;
+        MazeDescription.WallPrefab = Wall;
+        MazeDescription.CoinPrefab = GoalPrefab;
+
+        if (MazeDescription.IsConsoleRun()) {
+            var mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
+            if (mainCamera != null)
+                mainCamera.SetActive(true);
+        }
+
+        Random.InitState(MazeDescription.SeedValue);
+
+        var mazeDescriptionCells = new List<MazeDescriptionCell>();
+        var cellsWithCoinIndexes = new List<int>();
+        var mMazeGenerator = new TreeMazeGenerator(MazeDescription.Rows, MazeDescription.Cols);
+        mMazeGenerator.GenerateMaze();
+        for (var row = 0; row < MazeDescription.Rows; ++row) {
+            for (var column = 0; column < MazeDescription.Cols; ++column) {
+                var x = column * MazeDescription.CellWidth;
+                var z = row * MazeDescription.CellHeight;
+                var cell = mMazeGenerator.GetMazeCell(row, column);
+
+                var floor = Instantiate(Floor, new Vector3(x, 0, z), Quaternion.Euler(0, 0, 0));
+                floor.transform.parent = transform;
+
+                if (cell.WallRight) {
+                    var wall = Instantiate(Wall, new Vector3(x + MazeDescription.CellWidth / 2, 0, z) + Wall.transform.position, Quaternion.Euler(0, 90, 0));
+                    wall.transform.parent = transform;
+                }
+                if (cell.WallFront) {
+                    var wall = Instantiate(Wall, new Vector3(x, 0, z + MazeDescription.CellHeight / 2) + Wall.transform.position, Quaternion.Euler(0, 0, 0));
+                    wall.transform.parent = transform;
+                }
+                if (cell.WallLeft) {
+                    var wall = Instantiate(Wall, new Vector3(x - MazeDescription.CellWidth / 2, 0, z) + Wall.transform.position, Quaternion.Euler(0, 270, 0));
+                    wall.transform.parent = transform;
+                }
+                if (cell.WallBack) {
+                    var wall = Instantiate(Wall, new Vector3(x, 0, z - MazeDescription.CellHeight / 2) + Wall.transform.position, Quaternion.Euler(0, 180, 0));
+                    wall.transform.parent = transform;
+                }
+
+                var mazeDescriptionCell = new MazeDescriptionCell {
+                    Row = row,
+                    Column = column,
+                    CanMoveBackward = !cell.WallBack,
+                    CanMoveLeft = !cell.WallLeft,
+                    CanMoveRight = !cell.WallRight,
+                    CanMoveForward = !cell.WallFront,
+                    HasCoin = false,
+                };
+                if (cell.IsGoal)
+                    cellsWithCoinIndexes.Add(mazeDescriptionCells.Count);
+                mazeDescriptionCells.Add(mazeDescriptionCell);
+            }
+        }
+
+        Debug.Assert(cellsWithCoinIndexes.Count >= MazeDescription.Coins);
+        cellsWithCoinIndexes = cellsWithCoinIndexes.OrderBy(x => Random.value).ToList();
+        for (var i = 0; i < MazeDescription.Coins; ++i) {
+            var cell = mazeDescriptionCells[cellsWithCoinIndexes[i]];
+            cell.HasCoin = true;
+            var x = cell.Column * MazeDescription.CellWidth;
+            var z = cell.Row * MazeDescription.CellHeight;
+            var coin = Instantiate(GoalPrefab, new Vector3(x, 1, z), Quaternion.Euler(0, 0, 0));
+            coin.transform.parent = transform;
+        }
+
+        if (Pillar != null) {
+            for (var row = 0; row <= MazeDescription.Rows; ++row) {
+                for (var column = 0; column <= MazeDescription.Cols; ++column) {
+                    var x = column * MazeDescription.CellWidth;
+                    var z = row * MazeDescription.CellHeight;
+                    var pillar = Instantiate(Pillar, new Vector3(x - MazeDescription.CellWidth / 2, 0, z - MazeDescription.CellHeight / 2), Quaternion.identity);
+                    pillar.transform.parent = transform;
+                }
+            }
+        }
+
+        MazeDescription.Cells = mazeDescriptionCells;
+    }
 }

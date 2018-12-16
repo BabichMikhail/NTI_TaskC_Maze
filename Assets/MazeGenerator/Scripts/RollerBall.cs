@@ -1,78 +1,134 @@
-﻿using UnityEngine;
-using System.Collections;
+﻿using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
 
-//<summary>
-//Ball movement controlls and simple third-person-style camera
-//</summary>
-public class RollerBall : MonoBehaviour {
+public class RollerBall : MonoBehaviour
+{
+    public GameObject ViewCamera;
+    public bool UseManualBallController;
 
-	public GameObject ViewCamera = null;
-	public AudioClip JumpSound = null;
-	public AudioClip HitSound = null;
-	public AudioClip CoinSound = null;
+    private const int IntervalMilliseconds = 25;
+    private const float Speed = 4f;
 
-	private Rigidbody mRigidBody = null;
-	private AudioSource mAudioSource = null;
-	private bool mFloorTouched = false;
+    private Rigidbody mRigidBody;
+    private int lastCallTime = -IntervalMilliseconds;
+    private int iterations;
+    private BallControl ballController;
+    private int visitedCoinCount;
+    private float successTime;
 
-	void Start () {
-		mRigidBody = GetComponent<Rigidbody> ();
-		mAudioSource = GetComponent<AudioSource> ();
-	}
+    private readonly List<Vector2> ballPositions = new List<Vector2>();
+    private bool finished;
+    private bool success;
+    private bool outputWrote;
 
-	void FixedUpdate () {
-		if (mRigidBody != null) {
-			if (Input.GetButton ("Horizontal")) {
-				mRigidBody.AddTorque(Vector3.back * Input.GetAxis("Horizontal")*10);
-			}
-			if (Input.GetButton ("Vertical")) {
-				mRigidBody.AddTorque(Vector3.right * Input.GetAxis("Vertical")*10);
-			}
-			if (Input.GetButtonDown("Jump")) {
-				if(mAudioSource != null && JumpSound != null){
-					mAudioSource.PlayOneShot(JumpSound);
-				}
-				mRigidBody.AddForce(Vector3.up*200);
-			}
-		}
-		if (ViewCamera != null) {
-			Vector3 direction = (Vector3.up*2+Vector3.back)*2;
-			RaycastHit hit;
-			Debug.DrawLine(transform.position,transform.position+direction,Color.red);
-			if(Physics.Linecast(transform.position,transform.position+direction,out hit)){
-				ViewCamera.transform.position = hit.point;
-			}else{
-				ViewCamera.transform.position = transform.position+direction;
-			}
-			ViewCamera.transform.LookAt(transform.position);
-		}
-	}
+    private void Start()
+    {
+        mRigidBody = GetComponent<Rigidbody>();
+        Debug.Assert(mRigidBody != null);
+        lastCallTime = (int)(Time.time * 1000) + IntervalMilliseconds;
+        ballController = UseManualBallController ? (BallControl) new ManualBallControl() : new AutoBallControl();
+        ballController.SetMaze();
+        if (MazeDescription.IsConsoleRun())
+            Time.timeScale = 100.0f;
+    }
 
-	void OnCollisionEnter(Collision coll){
-		if (coll.gameObject.tag.Equals ("Floor")) {
-			mFloorTouched = true;
-			if (mAudioSource != null && HitSound != null && coll.relativeVelocity.y > .5f) {
-				mAudioSource.PlayOneShot (HitSound, coll.relativeVelocity.magnitude);
-			}
-		} else {
-			if (mAudioSource != null && HitSound != null && coll.relativeVelocity.magnitude > 2f) {
-				mAudioSource.PlayOneShot (HitSound, coll.relativeVelocity.magnitude);
-			}
-		}
-	}
+    private void Finish()
+    {
+        finished = true;
+        SaveBallPosition();
+        Time.timeScale = 1.0f;
+        if (MazeDescription.IsConsoleRun()) {
+            WriteOutputFile();
+            Application.Quit();
+        }
+    }
 
-	void OnCollisionExit(Collision coll){
-		if (coll.gameObject.tag.Equals ("Floor")) {
-			mFloorTouched = false;
-		}
-	}
+    private void WriteOutputFile()
+    {
+        if (outputWrote)
+            return;
+        outputWrote = true;
+        var lines = new List<string>{
+            success ? "Success" : (MazeDescription.Coins - visitedCoinCount).ToString(),
+            ballPositions.Count.ToString(),
+        };
+        foreach (var ballPosition in ballPositions)
+            lines.Add(ballPosition.x + " " + ballPosition.y);
+        File.WriteAllLines("output.txt", lines.ToArray());
+    }
 
-	void OnTriggerEnter(Collider other) {
-		if (other.gameObject.tag.Equals ("Coin")) {
-			if(mAudioSource != null && CoinSound != null){
-				mAudioSource.PlayOneShot(CoinSound);
-			}
-			Destroy(other.gameObject);
-		}
-	}
+    private void SaveBallPosition()
+    {
+        ballPositions.Add(new Vector2(transform.position.x, transform.position.z));
+    }
+
+    private void FixedUpdate()
+    {
+        if (visitedCoinCount == MazeDescription.Coins) {
+            if (!finished)
+                successTime = Time.unscaledTime;
+            Debug.Log("Success. Time:  " + successTime);
+            success = true;
+            Finish();
+            return;
+        }
+
+        if (iterations == MazeDescription.BallEnergy) {
+            Debug.Log("Ball has no energy!");
+            success = false;
+            Finish();
+            return;
+        }
+
+        if (!MazeDescription.IsConsoleRun()) {
+            var stepCount = 0;
+            while (Time.time * 1000 + IntervalMilliseconds >= lastCallTime) {
+                ++stepCount;
+                lastCallTime += IntervalMilliseconds;
+            }
+            if (stepCount == 0)
+                return;
+        }
+
+        SaveBallPosition();
+        if (mRigidBody != null) {
+            var move = ballController.GetMove(transform.position.x, transform.position.z);
+            var velocity = Vector3.zero;
+            if ((move & BallControl.MoveTypeRight) != 0)
+                velocity += Vector3.right;
+            if ((move & BallControl.MoveTypeBottom) != 0)
+                velocity += Vector3.back;
+            if ((move & BallControl.MoveTypeLeft) != 0)
+                velocity -= Vector3.right;
+            if ((move & BallControl.MoveTypeTop) != 0)
+                velocity -= Vector3.back;
+
+            mRigidBody.velocity = velocity;
+            if (velocity != Vector3.zero) {
+                mRigidBody.velocity = velocity.normalized * Speed;
+                ++iterations;
+                Debug.Log(iterations);
+            }
+        }
+
+        if (ViewCamera != null) {
+            var direction = (Vector3.up * 5 + Vector3.back) * 4;
+            RaycastHit hit;
+            Debug.DrawLine(transform.position,transform.position + direction,Color.red);
+            ViewCamera.transform.position =
+                Physics.Linecast(transform.position, transform.position + direction, out hit)
+                    ? hit.point
+                    : transform.position + direction;
+            ViewCamera.transform.LookAt(transform.position);
+        }
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.gameObject.tag.Equals("Coin")) {
+            Destroy(other.gameObject);
+            ++visitedCoinCount;
+        }
+    }
 }
