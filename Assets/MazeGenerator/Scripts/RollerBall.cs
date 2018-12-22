@@ -105,11 +105,10 @@ public class RollerBall : MonoBehaviour
                 velocity -= Vector3.back;
 
             mRigidBody.velocity = velocity;
-            if (velocity != Vector3.zero) {
+            if (velocity != Vector3.zero)
                 mRigidBody.velocity = velocity.normalized * Speed;
-                ++iterations;
-                Debug.Log(iterations);
-            }
+            Debug.Log(iterations);
+            ++iterations;
         }
 
         if (ViewCamera != null) {
